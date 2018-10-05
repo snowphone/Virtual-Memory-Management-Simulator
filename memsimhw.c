@@ -10,8 +10,8 @@
 #include <stdint.h>
 #include <assert.h>
 
-#define PAGESIZEBITS 12			// page size = 4Kbytes
-#define VIRTUALADDRBITS 32		// virtual address space size = 4Gbytes
+const int PAGESIZEBITS = 12;			// page size = 4Kbytes
+const int VIRTUALADDRBITS = 32;			// virtual address space size = 4Gbytes
 
 #define LINE printf("%d\n", __LINE__)
 
@@ -124,7 +124,8 @@ void replacePage(const Proc procTable, const Proc proc, int level, const uint32_
 	}
 }
 
-void secondLevelVMSim(struct procEntry* procTable, struct framePage* phyMemFrames) {
+void secondLevelVMSim(struct procEntry* procTable, struct framePage* phyMemFrames) 
+{
 	int i = 0;
 	//calculate page bits and sizes;
 	const uint32_t firstPageSize = 1u << firstLevelBits,
@@ -205,8 +206,130 @@ void secondLevelVMSim(struct procEntry* procTable, struct framePage* phyMemFrame
 	}
 }
 
-void invertedPageVMSim(struct procEntry *procTable, struct framePage *phyMemFrames, int nFrame) {
+uint32_t hash(uint32_t pid, uint32_t addr)
+{
+	const int nFrame = (1<<(phyMemSizeBits-PAGESIZEBITS)); 
+	return (addr + pid) % nFrame;
+}
+
+// equivalent to hash[proc] or hash.at(proc);
+// also, log its results.
+int hashAt(Ipage hashTable, Proc proc, uint32_t addr)
+{
+	uint32_t page_idx = hash(proc->pid, addr);
+	//cf) list.at(0) is a dummy.
+	Ipage ptr;
+	//conflict
+	for(ptr = hashTable[page_idx].next; ptr; ptr = ptr->next)
+	{
+		proc->numIHTConflictAccess++;
+		if(ptr->pid == proc->pid)
+		{
+			proc->numIHTNonNULLAcess++;
+			return ptr->frameNumber;
+		}
+	}
+	proc->numIHTNULLAccess++;
+	return -1;
+}
+
+// map.at(pid, virt_addr) = value (frame #)
+void hashInsert(Ipage hashTable, Proc proc, uint32_t addr, uint32_t value /* == frame # */)
+{
+	uint32_t idx = hash(proc->pid, addr);
+	Ipage elem = hashTable + idx;
+	if(elem)
+	{
+		Ipage new_elem = calloc(1, sizeof(struct invertedPageTableEntry));
+
+		//store unique key to avoid collision
+		new_elem->pid = proc->pid; 
+		new_elem->virtualPageNumber = addr;
+
+		//store value
+		new_elem->frameNumber = value;
+
+		//set list order
+		new_elem->next = elem->next;
+		elem->next = new_elem;
+	}
+}
+
+void hashRemoveAt(Ipage hashTable, Proc proc, uint32_t addr)
+{
+	uint32_t page_idx = hash(proc->pid, addr);
+	//cf) list.at(0) is a dummy.
+		  Ipage prev = hashTable + page_idx,
+				list = prev->next,
+				ptr;
+	for(ptr = list; ptr; ptr = ptr->next, prev = prev->next)
+	{
+		if(ptr->pid == proc->pid && ptr->virtualPageNumber == addr)
+		{
+			prev->next = ptr->next;
+			free(ptr);
+			return;
+		}
+	}
+}
+
+
+//debugging
+void invertedPageVMSim(struct procEntry *procTable, struct framePage *phyMemFrames, int nFrame) 
+{
 	int i=0;
+	//make IPT
+	Ipage hashTable = malloc(nFrame * sizeof(struct invertedPageTableEntry));
+	for(i=0; i < nFrame; ++i)
+	{
+		hashTable[i].frameNumber = i;
+		hashTable[i].pid = -1;
+		hashTable[i].next = NULL;
+		hashTable[i].virtualPageNumber = 0;
+	}
+
+	uint32_t memoryReads = 1000000; 	//one million
+	while(memoryReads--)
+	{
+		for(i=0; i < numProcess; ++i)
+		{
+			Proc proc = procTable + i;
+			uint32_t addr; 
+			char action; 	//maybe unused
+			fscanf(proc->tracefp, "%x %c", &addr, &action);
+			++proc->ntraces;
+
+			int frameNum = hashAt(hashTable, proc, addr);
+			int pid;
+
+			if(frameNum >= 0 && (pid = phyMemFrames[frameNum].pid) == proc->pid)
+			/* page hit */
+			{
+				proc->numPageHit++;
+				//allocate
+				phyMemFrames[frameNum].pid = proc->pid;
+				phyMemFrames[frameNum].virtualPageNumber = addr;
+			}
+			else /* page fault */
+			{
+				proc->numPageFault++;
+				if(pid != proc->pid) /* already used -> release previous page located at phyMem[frameNum] */
+				{
+					hashRemoveAt(hashTable, procTable + pid, phyMemFrames[frameNum].virtualPageNumber);
+				}
+				//map new page into phyMem[frameNum]
+				oldestFrame->pid = proc->pid;
+				oldestFrame->virtualPageNumber = addr;
+
+				hashInsert(hashTable, proc, addr, oldestFrame->number);
+
+				//renew oldestFrame
+				oldestFrame = oldestFrame->lruRight;
+			}
+		}
+	}
+
+	//display results
 	for(i=0; i < numProcess; i++) {
 		printf("**** %s *****\n",procTable[i].traceName);
 		printf("Proc %d Num of traces %d\n",i,procTable[i].ntraces);
@@ -218,6 +341,19 @@ void invertedPageVMSim(struct procEntry *procTable, struct framePage *phyMemFram
 		assert(procTable[i].numPageHit + procTable[i].numPageFault == procTable[i].ntraces);
 		assert(procTable[i].numIHTNULLAccess + procTable[i].numIHTNonNULLAcess == procTable[i].ntraces);
 	}
+
+	//release memory
+	for(i=0; i < nFrame; ++i)
+	{
+		Ipage ptr = hashTable[i].next;
+		while(ptr)
+		{
+			Ipage tmp = ptr->next;
+			free(ptr);
+			ptr = tmp;
+		}
+	}
+	free(hashTable);
 }
 
 int main(int argc, char *argv[]) {
@@ -268,11 +404,12 @@ int main(int argc, char *argv[]) {
 	secondLevelVMSim(procTable, frames);
 
 	// initialize procTable for the inverted Page Table
+	initPhyMem(frames, nFrame);
 	for(i = 0; i < numProcess; i++) {
 		// rewind tracefiles
-		//rewind(procTable[i].tracefp);
 		procTable[i].numPageFault = 0;
 		procTable[i].numPageHit = 0;
+		procTable[i].ntraces = 0;
 		fseek(procTable[i].tracefp, 0, SEEK_SET);
 	}
 
@@ -280,6 +417,7 @@ int main(int argc, char *argv[]) {
 	printf("The Inverted Page Table Memory Simulation Starts .....\n");
 	printf("=============================================================\n");
 	
+	invertedPageVMSim(procTable, frames, nFrame);
 
 	//release memory and file
 	for(i=0; i<numProcess; ++i)
