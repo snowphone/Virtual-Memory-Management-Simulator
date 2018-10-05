@@ -208,8 +208,9 @@ void secondLevelVMSim(struct procEntry* procTable, struct framePage* phyMemFrame
 
 uint32_t hash(uint32_t pid, uint32_t addr)
 {
+	uint32_t page_addr = addr >> PAGESIZEBITS;
 	const int nFrame = (1<<(phyMemSizeBits-PAGESIZEBITS)); 
-	return (addr + pid) % nFrame;
+	return (page_addr + pid) % nFrame;
 }
 
 // equivalent to hash[proc] or hash.at(proc);
