@@ -219,18 +219,21 @@ int hashAt(Ipage hashTable, Proc proc, uint32_t addr)
 {
 	uint32_t page_idx = hash(proc->pid, addr);
 	//cf) list.at(0) is a dummy.
-	Ipage ptr;
-	//conflict
-	for(ptr = hashTable[page_idx].next; ptr; ptr = ptr->next)
+	Ipage ptr = hashTable[page_idx].next;
+
+	if(ptr)
+			proc->numIHTNonNULLAcess++;
+	else
+		proc->numIHTNULLAccess++;
+
+	for(; ptr; ptr = ptr->next)
 	{
 		proc->numIHTConflictAccess++;
 		if(ptr->pid == proc->pid)
 		{
-			proc->numIHTNonNULLAcess++;
 			return ptr->frameNumber;
 		}
 	}
-	proc->numIHTNULLAccess++;
 	return -1;
 }
 
