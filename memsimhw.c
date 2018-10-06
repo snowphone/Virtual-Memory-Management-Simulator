@@ -1,3 +1,4 @@
+#define NDEBUG
 //
 // Virual Memory Simulator Homework
 // Two-level page table system
@@ -13,171 +14,172 @@
  *
  */
 
-const int PAGESIZEBITS = 12;			// page size = 4Kbytes
-const int VIRTUALADDRBITS = 32;			// virtual address space size = 4Gbytes
+const int PAGE_SZ_BITS = 12;			// page size = 4Kbytes
+const int VIRT_ADDR_BITS = 32;			// virtual address space size = 4Gbytes
 
-#define LINE printf("%d\n", __LINE__)
-#define TRACE_TWICE
 
 typedef struct pageTableEntry {
 	int level;				// page table level (1 or 2)
 	char valid;
 	struct pageTableEntry *sndLvPageTable;	// valid if this entry is for the first level page table (level = 1)
-	int frameNumber;								// valid if this entry is for the second level page table (level = 2)
+	int frame_num;								// valid if this entry is for the second level page table (level = 2)
 } *Page;
 
 typedef struct framePage {
 	uint32_t number;			// frame number
 	int pid;			// Process id that owns the frame
 	uint32_t vpn;			// virtual page number using the frame
-	struct framePage *lruLeft;	// for LRU circular doubly linked list
-	struct framePage *lruRight; // for LRU circular doubly linked list
+	struct framePage *lru_left;	// for LRU circular doubly linked list
+	struct framePage *lru_right; // for LRU circular doubly linked list
 } *Frame;
 
 typedef struct invertedPageTableEntry {
 	int pid;					// process id
 	uint32_t vpn;		// virtual page number
-	int frameNumber;			// frame number allocated
+	int frame_num;			// frame number allocated
 	struct invertedPageTableEntry *next;
 } *Ipage;
 
 typedef struct procEntry {
-	char* traceName;			// the memory trace name
+	char* trace_name;			// the memory trace name
 	int pid;					// process (trace) id
 	int ntraces;				// the number of memory traces
 	int num2ndLvPageTable;	// The 2nd level page created(allocated);
 	int numIHTConflictAccess; 	// The number of Inverted Hash Table Conflict Accesses
 	int numIHTNULLAccess;		// The number of Empty Inverted Hash Table Accesses
 	int numIHTNonNULLAcess;		// The number of Non Empty Inverted Hash Table Accesses
-	int numPageFault;			// The number of page faults
-	int numPageHit;				// The number of page hits
+	int num_page_fault;			// The number of page faults
+	int num_page_hit;				// The number of page hits
 	struct pageTableEntry *firstLvPageTable;
-	FILE* tracefp;
+	FILE* fp;
 }*Proc;
 
 
-Frame oldestFrame; // the oldest frame pointer
+Frame oldest_frame; // the oldest frame pointer
 
+int firstLvBits, phy_mem_sz_bits, numProcess;
 
-int firstLevelBits, phyMemSizeBits, numProcess;
-
-void initPhyMem(Frame phyMem, int nFrame) {
+void initPhyMem(Frame phy_mem, int nFrame) {
 	int i;
 	for (i = 0; i < nFrame; i++) {
-		phyMem[i].number = i;
-		phyMem[i].pid = -1;
-		phyMem[i].vpn = -1;
-		phyMem[i].lruLeft = &phyMem[(i - 1 + nFrame) % nFrame];
-		phyMem[i].lruRight = &phyMem[(i + 1 + nFrame) % nFrame]; /* +nFrame ensures that the result of mod operation is bigger than 0 */
+		phy_mem[i].number = i;
+		phy_mem[i].pid = -1;
+		phy_mem[i].vpn = -1;
+		phy_mem[i].lru_left = &phy_mem[(i - 1 + nFrame) % nFrame];
+		phy_mem[i].lru_right = &phy_mem[(i + 1 + nFrame) % nFrame]; /* +nFrame ensures that the result of mod operation is bigger than 0 */
 	}
 
-	oldestFrame = phyMem;
+	oldest_frame = phy_mem;
 }
 
 void updateLRU(Frame recent)
 {
-	if (oldestFrame == recent) {
-		oldestFrame = oldestFrame->lruRight;
+	if (oldest_frame == recent) {
+		oldest_frame = oldest_frame->lru_right;
 	}
 	else {
-		Frame prev = recent->lruLeft,
-			next = recent->lruRight;
+		Frame prev = recent->lru_left,
+			next = recent->lru_right;
 		//pop recent frame
-		prev->lruRight = next;
-		next->lruLeft = prev;
+		prev->lru_right = next;
+		next->lru_left = prev;
 		//recent frame : last link
 		//  first, make a link between so-far last node and recent node
-		oldestFrame->lruLeft->lruRight = recent;
-		recent->lruLeft = oldestFrame->lruLeft;
+		oldest_frame->lru_left->lru_right = recent;
+		recent->lru_left = oldest_frame->lru_left;
 		//  second, make a link between recent node and first node
-		oldestFrame->lruLeft = recent;
-		recent->lruRight = oldestFrame;
+		oldest_frame->lru_left = recent;
+		recent->lru_right = oldest_frame;
 	}
 }
 
 
 uint32_t firstPageIndex(const uint32_t page)
 {
-	uint32_t sndLvBits = VIRTUALADDRBITS - firstLevelBits - PAGESIZEBITS,
-		mask = ((1ULL << firstLevelBits) - 1) << (PAGESIZEBITS + sndLvBits);
-	uint32_t ret = (page & mask) >> (PAGESIZEBITS + sndLvBits);
-	assert(ret < (1u << firstLevelBits));
+	uint32_t sndLvBits = VIRT_ADDR_BITS - firstLvBits - PAGE_SZ_BITS,
+		mask = ((1ULL << firstLvBits) - 1) << (PAGE_SZ_BITS + sndLvBits);
+	uint32_t ret = (page & mask) >> (PAGE_SZ_BITS + sndLvBits);
+	assert(ret < (1u << firstLvBits));
 	return ret;
 }
 
 uint32_t secondPageIndex(const uint32_t page)
 {
-	uint32_t sndLvBits = VIRTUALADDRBITS - firstLevelBits - PAGESIZEBITS;
-	uint32_t mask = ((1u << sndLvBits) - 1) << PAGESIZEBITS;
-	uint32_t ret = (page & mask) >> PAGESIZEBITS;
-	assert(ret < (1u << (VIRTUALADDRBITS - firstLevelBits - PAGESIZEBITS)));
+	uint32_t sndLvBits = VIRT_ADDR_BITS - firstLvBits - PAGE_SZ_BITS,
+		mask = ((1u << sndLvBits) - 1) << PAGE_SZ_BITS,
+		ret = (page & mask) >> PAGE_SZ_BITS;
+	assert(ret < (1u << sndLvBits));
 	return ret;
 }
 
-uint32_t getVPN(uint32_t virt_addr);
+uint32_t getVPN(const uint32_t virt_addr)
+{
+	uint32_t ret = virt_addr >> PAGE_SZ_BITS;
+	return ret;
+}
 
 void handlePageFault(const Proc procTable, const Proc proc, const uint32_t virt_addr)
 {
-	const uint32_t sndLvBits = VIRTUALADDRBITS - PAGESIZEBITS - firstLevelBits,
-		secondPageSize = 1u << sndLvBits;
+	const uint32_t sndLvBits = VIRT_ADDR_BITS - PAGE_SZ_BITS - firstLvBits,
+		snd_page_sz = 1u << sndLvBits;
 
-	Page firPage = proc->firstLvPageTable + firstPageIndex(virt_addr);
-	assert(firPage);
+	Page fir_page = proc->firstLvPageTable + firstPageIndex(virt_addr);
+	assert(fir_page);
 
-	if (!firPage->valid) /* first level page: make second level page */
+	if (!fir_page->valid) /* first level page: make second level page */
 	{
-		firPage->sndLvPageTable = (Page)calloc(secondPageSize, sizeof(struct pageTableEntry));
-		assert(firPage->sndLvPageTable);
+		fir_page->sndLvPageTable = (Page)calloc(snd_page_sz, sizeof(struct pageTableEntry));
+		assert(fir_page->sndLvPageTable);
 		uint32_t i = 0;
-		for (i = 0; i < secondPageSize; ++i)
-			firPage->sndLvPageTable[i].level = 2;
-		firPage->valid = 1;
+		for (i = 0; i < snd_page_sz; ++i)
+			fir_page->sndLvPageTable[i].level = 2;
+		fir_page->valid = 1;
 
 		proc->num2ndLvPageTable++;
 	}
 
-	Page sndPage = firPage->sndLvPageTable + secondPageIndex(virt_addr);
+	Page sndPage = fir_page->sndLvPageTable + secondPageIndex(virt_addr);
 	assert(sndPage);
 	if (!sndPage->valid) /* second level page: get frame */
 	{
-		if (oldestFrame->pid != -1) /* used frame */
+		if (oldest_frame->pid != -1) /* a frame in use */
 		{
-			uint32_t firPageNum = firstPageIndex(oldestFrame->vpn << PAGESIZEBITS),
-				sndPageNum = secondPageIndex(oldestFrame->vpn << PAGESIZEBITS);
+			uint32_t fir_page_num = firstPageIndex(oldest_frame->vpn << PAGE_SZ_BITS),
+				snd_page_num = secondPageIndex(oldest_frame->vpn << PAGE_SZ_BITS);
 
-			procTable[oldestFrame->pid].firstLvPageTable[firPageNum].sndLvPageTable[sndPageNum].valid = 0;
-			procTable[oldestFrame->pid].firstLvPageTable[firPageNum].sndLvPageTable[sndPageNum].frameNumber = -1;
+			procTable[oldest_frame->pid].firstLvPageTable[fir_page_num].sndLvPageTable[snd_page_num].valid = 0;
+			procTable[oldest_frame->pid].firstLvPageTable[fir_page_num].sndLvPageTable[snd_page_num].frame_num = -1;
 		}
 
-		oldestFrame->pid = proc->pid;
-		oldestFrame->vpn = getVPN(virt_addr);
+		oldest_frame->pid = proc->pid;
+		oldest_frame->vpn = getVPN(virt_addr);
 
 
-		sndPage->frameNumber = oldestFrame->number;
+		sndPage->frame_num = oldest_frame->number;
 		sndPage->valid = 1;
 
 	}
 }
 
-void secondLevelVMSim(Proc procTable, Frame phyMemFrames)
+void secondLevelVMSim(Proc procTable, Frame phy_mem_frames)
 {
 	int i = 0;
 	//calculate page bits and sizes;
-	const uint32_t firstPageSize = 1u << firstLevelBits;
+	const uint32_t first_page_sz = 1u << firstLvBits;
 
 	//create a first-level page
 	for (i = 0; i < numProcess; ++i)
 	{
-		procTable[i].firstLvPageTable = (Page)calloc(firstPageSize, sizeof(struct pageTableEntry));
+		procTable[i].firstLvPageTable = (Page)calloc(first_page_sz, sizeof(struct pageTableEntry));
 		uint32_t j = 0;
-		for (j = 0; j < firstPageSize; ++j)
+		for (j = 0; j < first_page_sz; ++j)
 			procTable[i].firstLvPageTable[j].level = 1;
 	}
 
 	//begin simulating 2-level page system
 	//one cycle is given for each process
-	int memoryReads = 1000000; 	//one million
-	while (memoryReads--)
+	int mem_read = 1000000; 	//one million
+	while (mem_read--)
 	{
 		//for each process
 		for (i = 0; i < numProcess; i++)
@@ -186,73 +188,64 @@ void secondLevelVMSim(Proc procTable, Frame phyMemFrames)
 			//access memory once
 			uint32_t virt_addr = 0;
 			char action; 	//maybe unused
-			fscanf(proc->tracefp, "%x %c", &virt_addr, &action);
+			fscanf(proc->fp, "%x %c", &virt_addr, &action);
 			++proc->ntraces;
 
 
 			//check whether page fault arises or not
-			uint32_t firPageNum = firstPageIndex(virt_addr),
-				sndPageNum = secondPageIndex(virt_addr),
-				frameNum;
-			Page firPage = proc->firstLvPageTable + firPageNum;
+			uint32_t fir_page_num = firstPageIndex(virt_addr),
+				snd_page_num = secondPageIndex(virt_addr),
+				frame_num;
+			Page fir_page = proc->firstLvPageTable + fir_page_num;
 
-			if (firPage->valid && firPage->sndLvPageTable[sndPageNum].valid)
+			if (fir_page->valid && fir_page->sndLvPageTable[snd_page_num].valid)
+				/* page hit */
 			{
-				++proc->numPageHit;
-				frameNum = firPage->sndLvPageTable[sndPageNum].frameNumber;
-			}
-			else /*page fault*/
-			{
-				proc->numPageFault++;
-				frameNum = oldestFrame->number;
+				++proc->num_page_hit;
+				frame_num = fir_page->sndLvPageTable[snd_page_num].frame_num;
+			} else /*page fault*/ {
+				proc->num_page_fault++;
+				frame_num = oldest_frame->number;
 				handlePageFault(procTable, proc, virt_addr);
 			}
-			updateLRU(phyMemFrames + frameNum);
-
-			//You can get physical memory!
-			//do whatever you want!
+			updateLRU(phy_mem_frames + frame_num);
 		}
 	}
 
 	//display results
 	for (i = 0; i < numProcess; i++) {
-		printf("**** %s *****\n", procTable[i].traceName);
+		printf("**** %s *****\n", procTable[i].trace_name);
 		printf("Proc %d Num of traces %d\n", i, procTable[i].ntraces);
 		printf("Proc %d Num of second level page tables allocated %d\n", i, procTable[i].num2ndLvPageTable);
-		printf("Proc %d Num of Page Faults %d\n", i, procTable[i].numPageFault);
-		printf("Proc %d Num of Page Hit %d\n", i, procTable[i].numPageHit);
-		assert(procTable[i].numPageHit + procTable[i].numPageFault == procTable[i].ntraces);
+		printf("Proc %d Num of Page Faults %d\n", i, procTable[i].num_page_fault);
+		printf("Proc %d Num of Page Hit %d\n", i, procTable[i].num_page_hit);
+		assert(procTable[i].num_page_hit + procTable[i].num_page_fault == procTable[i].ntraces);
 	}
 
 	//release page table
 	for (i = 0; i < numProcess; ++i)
 	{
 		unsigned int j;
-		for (j = 0; j < firstPageSize; ++j)
+		for (j = 0; j < first_page_sz; ++j)
 			free(procTable[i].firstLvPageTable[j].sndLvPageTable);
 		free(procTable[i].firstLvPageTable);
 	}
 }
 
-uint32_t getVPN(uint32_t virt_addr)
-{
-	uint32_t ret = virt_addr >> PAGESIZEBITS;
-	return ret;
-}
 
 uint32_t hash(uint32_t pid, uint32_t vpn/* virtual page number */)
 {
-	const int nFrame = (1 << (phyMemSizeBits - PAGESIZEBITS));
+	const int nFrame = (1 << (phy_mem_sz_bits - PAGE_SZ_BITS));
 	return (vpn + pid) % nFrame;
 }
 
 // equivalent to hash[proc] or hash.at(proc);
 // also, log its results.
-int hashAt(Ipage hashTable, Proc proc, uint32_t vpn)
+int hashAt(Ipage hash_table, Proc proc, uint32_t vpn)
 {
 	uint32_t page_idx = hash(proc->pid, vpn);
 	//cf) list.at(0) is a dummy.
-	Ipage ptr = hashTable[page_idx].next;
+	Ipage ptr = hash_table[page_idx].next;
 
 	if (ptr)
 		proc->numIHTNonNULLAcess++;
@@ -264,19 +257,16 @@ int hashAt(Ipage hashTable, Proc proc, uint32_t vpn)
 		proc->numIHTConflictAccess++;
 		if (ptr->pid == proc->pid && ptr->vpn == vpn)
 		{
-			return ptr->frameNumber;
+			return ptr->frame_num;
 		}
 	}
 	return -1;
 }
 
 // map.at(pid, vpn) = value (frame #)
-void hashInsert(Ipage hashTable,
-	Proc proc,
-	uint32_t vpn /* virtual page number */,
-	uint32_t value /* frame # */)
+void hashInsert( Ipage hash_table, Proc proc, uint32_t vpn /* virtual page number */, uint32_t value /* frame # */)
 {
-	Ipage head = hashTable + hash(proc->pid, vpn);
+	Ipage head = hash_table + hash(proc->pid, vpn);
 	Ipage new_elem = (Ipage)calloc(1, sizeof(struct invertedPageTableEntry));
 
 	//store unique key to avoid collision
@@ -284,18 +274,18 @@ void hashInsert(Ipage hashTable,
 	new_elem->vpn = vpn;
 
 	//store value
-	new_elem->frameNumber = value;
+	new_elem->frame_num = value;
 
 	//set list order
 	new_elem->next = head->next;
 	head->next = new_elem;
 }
 
-void hashRemoveAt(Ipage hashTable, Proc proc, uint32_t vpn)
+void hashRemoveAt(Ipage hash_table, Proc proc, uint32_t vpn)
 {
 	uint32_t page_idx = hash(proc->pid, vpn);
 	//cf) list.at(0) is a dummy.
-	Ipage prev = hashTable + page_idx,
+	Ipage prev = hash_table + page_idx,
 		ptr;
 	for (ptr = prev->next; ptr; ptr = ptr->next, prev = prev->next)
 	{
@@ -313,84 +303,78 @@ void invertedPageVMSim(struct procEntry *procTable, struct framePage *phyMemFram
 {
 	int i = 0;
 	//make IPT
-	Ipage hashTable = (Ipage)malloc(nFrame * sizeof(struct invertedPageTableEntry));
+	Ipage hash_table = (Ipage)malloc(nFrame * sizeof(struct invertedPageTableEntry));
 	for (i = 0; i < nFrame; ++i)
 	{
-		hashTable[i].frameNumber = i;
-		hashTable[i].pid = -1;
-		hashTable[i].next = NULL;
-		hashTable[i].vpn = 0;
+		hash_table[i].frame_num = i;
+		hash_table[i].pid = -1;
+		hash_table[i].next = NULL;
+		hash_table[i].vpn = 0;
 	}
 
-	uint32_t memoryReads = 1000000; 	//one million
-	while (memoryReads--)
+	uint32_t mem_read = 1000000; 	//one million
+	while (mem_read--)
 	{
 		for (i = 0; i < numProcess; ++i)
 		{
 			Proc proc = procTable + i;
 			uint32_t virt_addr;
-			char action; 	//maybe unused
-			fscanf(proc->tracefp, "%x %c", &virt_addr, &action);
+			char action;	/* unused */
+			fscanf(proc->fp, "%x %c", &virt_addr, &action);
 			uint32_t vpn = getVPN(virt_addr);
-#ifdef TRACE_TWICE
 			++proc->ntraces;
-#endif
 
-			int frameNum = hashAt(hashTable, proc, vpn);
-			assert(frameNum <  nFrame);
+			int frame_num = hashAt(hash_table, proc, vpn);
+			assert(frame_num < nFrame);
 
-			if (frameNum >= 0)
+			if (frame_num >= 0)
 				/* page hit */
 			{
-#ifdef TRACE_TWICE
-				proc->numPageHit++;
-#endif
+				proc->num_page_hit++;
 				//allocate
-				phyMemFrames[frameNum].pid = proc->pid;
-				phyMemFrames[frameNum].vpn = vpn;
+				phyMemFrames[frame_num].pid = proc->pid;
+				phyMemFrames[frame_num].vpn = vpn;
 
 
 			}
 			else /* page fault */
 			{
-#ifdef TRACE_TWICE
-				proc->numPageFault++;
-#endif
-				if (oldestFrame->pid != -1) /* already used */
+				proc->num_page_fault++;
+				if (oldest_frame->pid != -1) /* already used */
 				{
-					hashRemoveAt(hashTable, procTable + oldestFrame->pid, oldestFrame->vpn);
+					hashRemoveAt(hash_table, procTable + oldest_frame->pid, oldest_frame->vpn);
 				}
 
 				//map new page into phyMem[frameNum]
-				oldestFrame->pid = proc->pid;
-				oldestFrame->vpn = vpn;
+				oldest_frame->pid = proc->pid;
+				oldest_frame->vpn = vpn;
 
-				hashInsert(hashTable, proc, vpn, oldestFrame->number);
+				hashInsert(hash_table, proc, vpn, oldest_frame->number);
 
-				frameNum = oldestFrame->number;
+				frame_num = oldest_frame->number;
 			}
 			//update LRU
-			updateLRU(phyMemFrames + frameNum);
+			updateLRU(phyMemFrames + frame_num);
 		}
 	}
 
 	//display results
 	for (i = 0; i < numProcess; i++) {
-		printf("**** %s *****\n", procTable[i].traceName);
+		printf("**** %s *****\n", procTable[i].trace_name);
 		printf("Proc %d Num of traces %d\n", i, procTable[i].ntraces);
 		printf("Proc %d Num of Inverted Hash Table Access Conflicts %d\n", i, procTable[i].numIHTConflictAccess);
 		printf("Proc %d Num of Empty Inverted Hash Table Access %d\n", i, procTable[i].numIHTNULLAccess);
 		printf("Proc %d Num of Non-Empty Inverted Hash Table Access %d\n", i, procTable[i].numIHTNonNULLAcess);
-		printf("Proc %d Num of Page Faults %d\n", i, procTable[i].numPageFault);
-		printf("Proc %d Num of Page Hit %d\n", i, procTable[i].numPageHit);
-		assert(procTable[i].numPageHit + procTable[i].numPageFault == procTable[i].ntraces);
+		printf("Proc %d Num of Page Faults %d\n", i, procTable[i].num_page_fault);
+		printf("Proc %d Num of Page Hit %d\n", i, procTable[i].num_page_hit);
+		assert(procTable[i].num_page_hit + procTable[i].num_page_fault == procTable[i].ntraces);
 		assert(procTable[i].numIHTNULLAccess + procTable[i].numIHTNonNULLAcess == procTable[i].ntraces);
 	}
 
 	//release memory
 	for (i = 0; i < nFrame; ++i)
 	{
-		Ipage ptr = hashTable[i].next;
+		Ipage ptr = hash_table[i].next;
 		while (ptr)
 		{
 			Ipage tmp = ptr->next;
@@ -398,7 +382,7 @@ void invertedPageVMSim(struct procEntry *procTable, struct framePage *phyMemFram
 			ptr = tmp;
 		}
 	}
-	free(hashTable);
+	free(hash_table);
 }
 
 int main(int argc, char *argv[]) {
@@ -409,68 +393,66 @@ int main(int argc, char *argv[]) {
 		exit(1);
 	}
 
-	sscanf(argv[2], "%d", &phyMemSizeBits);
-	if (phyMemSizeBits < PAGESIZEBITS) {
-		printf("PhysicalMemorySizeBits %d should be larger than PageSizeBits %d\n", phyMemSizeBits, PAGESIZEBITS);
+	sscanf(argv[2], "%d", &phy_mem_sz_bits);
+	if (phy_mem_sz_bits < PAGE_SZ_BITS) {
+		printf("PhysicalMemorySizeBits %d should be larger than PageSizeBits %d\n", phy_mem_sz_bits, PAGE_SZ_BITS);
 		exit(1);
 	}
 
-	sscanf(argv[1], "%d", &firstLevelBits);
+	sscanf(argv[1], "%d", &firstLvBits);
 	// secondLevelBits >= 0
-	if (VIRTUALADDRBITS <= PAGESIZEBITS + firstLevelBits) {
-		printf("firstLevelBits %d is too Big\n", firstLevelBits);
+	if (VIRT_ADDR_BITS <= PAGE_SZ_BITS + firstLvBits) {
+		printf("firstLevelBits %d is too Big\n", firstLvBits);
 		exit(1);
 	}
 
 	// initialize procTable for two-level page table
 	numProcess = argc - 3;
-	Proc procTable = (Proc)calloc(numProcess, sizeof(struct procEntry));
+	Proc proc_table = (Proc)calloc(numProcess, sizeof(struct procEntry));
 	for (i = 0; i < numProcess; i++) {
 		// opening a tracefile for the process
 		printf("process %d opening %s\n", i, argv[i + 3]);
-		procTable[i].traceName = argv[i + 3];
-		procTable[i].pid = i;
-		procTable[i].tracefp = fopen(procTable[i].traceName, "r");
+		proc_table[i].trace_name = argv[i + 3];
+		proc_table[i].pid = i;
+		proc_table[i].fp = fopen(proc_table[i].trace_name, "r");
 	}
 
 	//initialize frame(physical memory)
-	int nFrame = (1 << (phyMemSizeBits - PAGESIZEBITS));
+	int nFrame = (1 << (phy_mem_sz_bits - PAGE_SZ_BITS));
 	assert(nFrame > 0);
 
-	Frame phyMemFrames = malloc(nFrame * sizeof(struct framePage));
-	initPhyMem(phyMemFrames, nFrame);
+	Frame phy_mem_frames = malloc(nFrame * sizeof(struct framePage));
+	initPhyMem(phy_mem_frames, nFrame);
 
-	printf("\nNum of Frames %d Physical Memory Size %ld bytes\n", nFrame, (1L << phyMemSizeBits));
+	printf("\nNum of Frames %d Physical Memory Size %ld bytes\n", nFrame, (1L << phy_mem_sz_bits));
 
 	printf("=============================================================\n");
 	printf("The 2nd Level Page Table Memory Simulation Starts .....\n");
 	printf("=============================================================\n");
 
-	secondLevelVMSim(procTable, phyMemFrames);
+	secondLevelVMSim(proc_table, phy_mem_frames);
 
 	// initialize procTable for the inverted Page Table
-	initPhyMem(phyMemFrames, nFrame);
+	initPhyMem(phy_mem_frames, nFrame);
 	for (i = 0; i < numProcess; i++) {
 		// rewind tracefiles
-#ifdef TRACE_TWICE
-		procTable[i].numPageFault = 0;
-		procTable[i].numPageHit = 0;
-		procTable[i].ntraces = 0;
-#endif
-		fseek(procTable[i].tracefp, 0, SEEK_SET);
+		proc_table[i].num_page_fault = 0;
+		proc_table[i].num_page_hit = 0;
+		proc_table[i].ntraces = 0;
+		fseek(proc_table[i].fp, 0, SEEK_SET);
 	}
 
 	printf("=============================================================\n");
 	printf("The Inverted Page Table Memory Simulation Starts .....\n");
 	printf("=============================================================\n");
 
-	invertedPageVMSim(procTable, phyMemFrames, nFrame);
+	invertedPageVMSim(proc_table, phy_mem_frames, nFrame);
 
 	//release memory and file
 	for (i = 0; i < numProcess; ++i)
-		fclose(procTable[i].tracefp);
+		fclose(proc_table[i].fp);
 
-	free(procTable);
-	free(phyMemFrames);
+	free(proc_table);
+	free(phy_mem_frames);
 	return 0;
 }
