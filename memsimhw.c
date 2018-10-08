@@ -1,18 +1,15 @@
-#define NDEBUG
 //
 // Virual Memory Simulator Homework
 // Two-level page table system
 // Inverted page table with a hashing system 
-// Student Name: Moon Junoh
-// Student Number: B611062
+// Student Name:	Moon Junoh
+// Student Number:	B611062
 //
+#define NDEBUG
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <assert.h>
-/*TODO: implement LRU
- *
- */
 
 const int PAGE_SZ_BITS = 12;			// page size = 4Kbytes
 const int VIRT_ADDR_BITS = 32;			// virtual address space size = 4Gbytes
