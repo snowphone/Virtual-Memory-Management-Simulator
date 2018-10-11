@@ -115,6 +115,12 @@ uint32_t getVPN(const uint32_t virt_addr)
 	return ret;
 }
 
+uint32_t getOffset(const uint32_t addr)
+{
+	uint32_t mask =  (1u << PAGE_SZ_BITS) - 1;
+	return addr & mask;
+}
+
 void handlePageFault(const Proc procTable, const Proc proc, const uint32_t virt_addr)
 {
 	const uint32_t sndLvBits = VIRT_ADDR_BITS - PAGE_SZ_BITS - firstLvBits,
@@ -206,6 +212,8 @@ void secondLevelVMSim(Proc procTable, Frame phy_mem_frames)
 				handlePageFault(procTable, proc, virt_addr);
 			}
 			updateLRU(phy_mem_frames + frame_num);
+			uint32_t phy_addr = (phy_mem_frames[frame_num].number << PAGE_SZ_BITS) | getOffset(virt_addr);
+			printf("2Level procID %d traceNumber %d virtual addr %x pysical addr %x\n", i,  proc->ntraces, virt_addr, phy_addr);
 		}
 	}
 
@@ -352,6 +360,8 @@ void invertedPageVMSim(struct procEntry *procTable, struct framePage *phyMemFram
 			}
 			//update LRU
 			updateLRU(phyMemFrames + frame_num);
+			uint32_t phy_addr = (phyMemFrames[frame_num].number << PAGE_SZ_BITS) | getOffset(virt_addr);
+			printf("IHT procID %d traceNumber %d virtual addr %x pysical addr %x\n", i, proc->ntraces, virt_addr, phy_addr);
 		}
 	}
 
