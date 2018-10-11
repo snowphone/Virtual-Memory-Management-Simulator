@@ -13,8 +13,8 @@ for i in range(1, 4):
 
 i = 1
 while True:
+	firstLvBits = random.randint(1, 19)
 	phyMem = random.randint(12, 32)
-	firstLvBits = random.randint(1, phyMem - 11)
 	traces = random.choice(trace_args)
 
 	args = [str(firstLvBits), str(phyMem)] + traces
@@ -22,9 +22,9 @@ while True:
 	mine = subprocess.check_output(["./memsimhw"] + args)
 
 	if answer == mine:
-		print(i,": ", [str(firstLvBits), str(phyMem)]+traces, "...", "PASSED")
+		print(i,[firstLvBits, phyMem]+traces, "PASSED")
 	else:
-		raise
+		raise "Failed"
 
 	i += 1
 
