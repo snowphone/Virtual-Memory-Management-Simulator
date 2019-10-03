@@ -3,7 +3,7 @@
 import os, sys, subprocess, random, itertools
 
 
-trace_path = "../mtraces/"
+trace_path = "./mtraces/"
 trace_list = [trace_path + trace for trace in os.listdir(trace_path)]
 
 trace_args = []
