@@ -10,21 +10,26 @@ trace_args = []
 for i in range(1, 4):
 	trace_args += list(map(list, itertools.product(trace_list, repeat=i)))
 
+subprocess.call("gcc -o memsimhw memsimhw.c -O2 -W -Wall", shell=True)
 
 i = 1
 while True:
-	firstLvBits = random.randint(1, 19)
-	phyMem = random.randint(12, 32)
+	firstLvBits = random.randint(0, 32)
+	phyMem = random.randint(0, 32)
 	traces = random.choice(trace_args)
 
 	args = [str(firstLvBits), str(phyMem)] + traces
-	answer = subprocess.check_output(["./memsim"] + args)
+	try:
+		answer = subprocess.check_output(["./memsim"] + args)
+	except:
+		continue
 	mine = subprocess.check_output(["./memsimhw"] + args)
 
 	if answer == mine:
 		print(i,[firstLvBits, phyMem]+traces, "PASSED")
 	else:
-		raise "Failed"
+		print(" ".join(args))
+		exit(1)
 
 	i += 1
 
